@@ -11,7 +11,7 @@ from Nia.database import chatbot_collection
    
 # -------- SETTINGS --------
 
-API_URL = "https://gpt33-8dbb8bea9d02."
+API_URL = "https://stdgpt.vercel.app/?text="
 
 MAX_HISTORY = 6
 
