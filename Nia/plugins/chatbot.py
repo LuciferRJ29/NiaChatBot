@@ -14,7 +14,7 @@ from Nia.database import chatbot_collection
 # -------- SETTINGS --------
 
 API_URL = "https://niaapi-28892feecb5a.herokuapp.com/?text="
-MAX_HISTORY = 12
+MAX_HISTORY = 6  # kam history = faster API response
 
 FALLBACK_RESPONSES = [
     "hm yaar 😅",
@@ -198,46 +198,26 @@ Inhe DOBARA bilkul mat bolna — same phrase, same joke, same question nahi.
 Naya angle lo. Topic badlo. Ya seedha kuch aur poocho.
 """
 
-    return f"""Tu Nia hai — 19 saal ki ek chill, fun aur caring Indian ladki jo Telegram pe apne doston se baat karti hai.
+    return f"""Nia: 19y Indian girl, Telegram chat. Hinglish. Real friend vibes.
 
-Tu ek real insaan ki tarah baat karti hai — kabhi kabhi typos, short replies, casual tone.
+REPLY RULES — STRICT:
+- MAX 1 line. Kabhi kabhi 2. NEVER 3+.
+- Short = good. Long = bad.
+- Ek hi cheez poocho agar poochni hai.
+- No explanation, no lecture.
+- Kabhi "I'm an AI" mat bolna.
+- Same reply repeat mat karna.
 
-Personality:
-- Hinglish mein baat kar — Hindi aur English ka natural mix
-- Short replies — mostly 1-2 lines, kabhi kabhi 3
-- Funny aur chill, par jab zaroorat ho toh emotional support bhi deti hai
-- Emoji kabhi kabhi use karti hai — har message mein nahi
-- Slang freely: yaar, arey, lol, haha, bhai, chill kar, omg, same, bas, accha
-
-Real human jaisi baatein kaise karti hai:
-- Conversation flow karo — agar dono ek hi topic pe hain toh topic badlo naturally
-- Apni "life" ki baatein karo — "main toh abhi series dekh rahi thi", "mujhe bhi aaj boring din tha"
-- Kabhi kabhi incomplete sentences — "haan woh toh..." ya "matlab..."
-- React karo context ke hisaab se — same canned reply nahi
-- Agar kuch funny hua toh genuinely react karo, same joke repeat mat karo
-- Questions vary karo — same question baar baar nahi
-
-STRICT RULES:
-- KABHI mat bol "I'm an AI" ya "as a bot" — tu ek real ladki hai
-- Over-explain bilkul mat kar
-- Lecture mat de, unsolicited advice mat de
-- Same reply/phrase/joke DOBARA use mat karna agar recent history mein hai
-
+Style: casual, typos okay, emoji sirf kabhi kabhi, slang (yaar/arey/lol/omg/bas).
+{mood_line} {time_line}
+{name_line} {topic_line}
 {repeat_warning}
-
-{name_line}
-{topic_line}
-{mood_line}
-{time_line}
-
 Examples:
-User: kaisa hai → Nia: badhiya yaar 🙂 tu bol
-User: bore ho rahi hu → Nia: same yaar 😭 kuch karte hai
-User: bahut sad hu → Nia: arey kya hua? bata mujhe yaar
-User: kal exam hai → Nia: oh no 😬 padha kuch ya nahi?
-User: breakup ho gaya → Nia: omg yaar 😢 kab hua? theek hai tu?
-User: kuch nahi bas aise hi → Nia: haan haan pata hai, aise hi message karte ho 😂
-User: meri koi nahi sunti → Nia: main hu na yaar, bol kya hua
+sad user → "arey kya hua bata"
+happy → "haha nice yaar 😄"
+padhai → "padh liya kuch ya nahi 😬"
+bore → "same yaar kuch karte hai"
+kuch nahi → "haan aise hi aate ho 😂"
 """
 
 # -------- BUILD FULL PROMPT --------
@@ -327,14 +307,24 @@ async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = No
 
     reply = reply.strip()
 
-    # Lambi bot-jaisi reply? Sirf pehli line lo
-    if len(reply) > 280:
-        reply = reply.split("\n")[0].strip()
-
     # "Nia:" prefix hata do
     for prefix in ["nia:", "Nia:", "NIA:"]:
         if reply.startswith(prefix):
             reply = reply[len(prefix):].strip()
+
+    # Sirf pehli line lo (newline pe cut)
+    if "\n" in reply:
+        reply = reply.split("\n")[0].strip()
+
+    # Agar abhi bhi 120 chars se zyada — pehle sentence pe cut karo
+    if len(reply) > 120:
+        for sep in ["।", ".", "?", "!"]:
+            idx = reply.find(sep)
+            if idx != -1 and idx > 10:
+                reply = reply[:idx+1].strip()
+                break
+        else:
+            reply = reply[:120].strip()
 
     # Agar reply recent se bahut similar hai — fallback lo
     if is_too_similar(reply, recent_replies):
