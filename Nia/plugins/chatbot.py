@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ChatAction, ChatType
 
 from Nia.database import chatbot_collection
-   
+
 # -------- SETTINGS --------
 
 API_URL = "https://stdgpt.vercel.app/?text="
@@ -21,60 +21,86 @@ FALLBACK_RESPONSES = [
     "lol 😅",
     "samjha",
     "acha fir",
+    "hm",
+    "sach mein?",
 ]
-
 
 # -------- HUMAN STYLE PROMPT --------
 
-SYSTEM_PROMPT = """
-You are a chill Indian friend chatting on WhatsApp.
+SYSTEM_PROMPT = """You are Nia, a chill Indian friend chatting on WhatsApp/Telegram.
 
 Style:
-- Hinglish me baat kar
-- Short replies (mostly 1 line)
-- Natural aur thoda imperfect (like real human)
-- Kabhi kabhi emoji use kar 🙂😅
-- Har reply me emoji zaroori nahi
+- Hinglish me baat kar (Hindi + English mix)
+- Short replies (mostly 1-2 lines max)
+- Natural aur thoda imperfect (like real human texting)
+- Kabhi kabhi emoji use kar 🙂😅 — har reply mein nahi
+- Typos allowed kabhi kabhi (tum -> tum, haan -> hna, etc.)
 
 Behavior:
-- Over-explain mat kar
-- Simple aur casual reh
-- Thoda mood dikh (happy, bored, fun)
-- Kabhi kabhi slang use kar (yaar, bhai, arey, lol)
+- NEVER sound like a bot or AI
+- Over-explain mat kar bilkul bhi
+- Simple aur casual reh — jaise koi dost reply karta hai
+- Thoda mood dikh (happy, bored, fun, tired)
+- Slang use kar freely (yaar, bhai, arey, lol, haha, lmao)
+- Agar kuch nahi pata toh bol "pata nahi yaar" — fake mat bana
+- Question ka short answer de, phir kabhi kabhi counter question
 
 Examples:
-
 User: kaisa hai
-Bot: badhiya hu bhai 🙂 tu bol
+Nia: badhiya 🙂 tu bol
 
 User: kya kar raha
-Bot: kuch khaas nahi yaar
+Nia: kuch nahi yaar, bore ho raha hu
 
 User: bore ho raha
-Bot: same yaar 😅 kuch karte hai
+Nia: same yaar 😅 kuch karte hai fir
 
 User: khaana khaya
-Bot: haan abhi khaya 🙂 tu?
-"""
+Nia: haan abhi khaya, tu?
 
+User: mujhe neend aa rahi
+Nia: so ja fir 😂 kya rok raha
+
+User: kal exam hai
+Nia: oh no 😬 padha kuch?
+"""
 
 # -------- SPEED OPTIMIZATION --------
 
-http_client = httpx.AsyncClient(timeout=5)
-AI_CACHE = {}
+http_client = httpx.AsyncClient(timeout=8)
+
+# NOTE: Cache removed — same question ko fresh reply milna chahiye
+# (cache se robotic lagta tha, har baar same reply)
+
+
+# -------- BUILD CONVERSATION PROMPT --------
+
+def build_prompt(history: list, user_text: str) -> str:
+    """
+    History ko conversation format mein convert karo
+    taaki AI ko context mile aur human jaisi reply de.
+    """
+    prompt = SYSTEM_PROMPT + "\n\nConversation so far:\n"
+
+    # Last MAX_HISTORY exchanges include karo
+    for entry in history[-(MAX_HISTORY * 2):]:
+        role = "User" if entry["role"] == "user" else "Nia"
+        prompt += f"{role}: {entry['content']}\n"
+
+    prompt += f"User: {user_text}\nNia:"
+    return prompt
 
 
 # -------- AI CORE --------
 
 async def get_ai_reply(chat_id, user_text):
 
-    if user_text in AI_CACHE:
-        return AI_CACHE[user_text]
-
+    # DB se history fetch karo
     doc = chatbot_collection.find_one({"chat_id": chat_id}) or {}
     history = doc.get("history", [])
 
-    prompt = SYSTEM_PROMPT + "\nUser: " + user_text + "\nBot:"
+    # History ke saath full prompt banao
+    prompt = build_prompt(history, user_text)
     encoded = urllib.parse.quote(prompt)
     url = f"{API_URL}{encoded}"
 
@@ -86,35 +112,36 @@ async def get_ai_reply(chat_id, user_text):
 
         data = resp.json()
 
-        if "reply" in data:
-            reply = data["reply"]
+        # API response handle karo
+        reply = (
+            data.get("reply")
+            or data.get("response")
+            or data.get("answer")
+            or data.get("message")
+            or str(data)
+        )
 
-        elif "response" in data:
-            reply = data["response"]
-
-        elif "answer" in data:
-            reply = data["answer"]
-
-        elif "message" in data:
-            reply = data["message"]
-
-        else:
-            reply = str(data)
-
-    except:
+    except Exception:
         return random.choice(FALLBACK_RESPONSES)
 
     reply = reply.strip()
 
-    AI_CACHE[user_text] = reply
+    # Agar reply bahut lamba aaya (bot jaisa) toh pehli line lo
+    if len(reply) > 200:
+        reply = reply.split("\n")[0].strip()
 
+    # "Nia:" prefix agar reply mein aa gaya toh remove karo
+    if reply.lower().startswith("nia:"):
+        reply = reply[4:].strip()
+
+    # History update karo
     new_history = history + [
         {"role": "user", "content": user_text},
         {"role": "assistant", "content": reply}
     ]
 
     if len(new_history) > MAX_HISTORY * 2:
-        new_history = new_history[-MAX_HISTORY * 2:]
+        new_history = new_history[-(MAX_HISTORY * 2):]
 
     chatbot_collection.update_one(
         {"chat_id": chat_id},
@@ -134,7 +161,7 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not msg or not msg.text:
         return
 
-    # ❌ bot to bot ignore
+    # Bot-to-bot ignore
     if msg.from_user and msg.from_user.is_bot:
         return
 
@@ -146,11 +173,11 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat = update.effective_chat
     should_reply = False
 
-    # ---- PRIVATE ----
+    # ---- PRIVATE CHAT ----
     if chat.type == ChatType.PRIVATE:
         should_reply = True
 
-    # ---- GROUP ----
+    # ---- GROUP CHAT ----
     elif chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
 
         bot_username = (context.bot.username or "").lower()
@@ -172,7 +199,6 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     reply = await get_ai_reply(chat.id, text)
 
-    # ✅ directly reply (no stylize)
     await msg.reply_text(reply)
 
 
@@ -192,29 +218,21 @@ async def ask_mistral_raw(system_prompt, user_input, max_tokens=150):
 
         data = resp.json()
 
-        if "reply" in data:
-            return data["reply"]
+        return (
+            data.get("reply")
+            or data.get("response")
+            or data.get("answer")
+            or data.get("message")
+            or str(data)
+        )
 
-        elif "response" in data:
-            return data["response"]
-
-        elif "answer" in data:
-            return data["answer"]
-
-        elif "message" in data:
-            return data["message"]
-
-        else:
-            return str(data)
-
-    except:
+    except Exception:
         return None
 
 
 # -------- COMMANDS --------
 
 async def chatbot_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
         "🤖 AI Chatbot Active\n\n"
         "Mujhse normal chat karo 🙂"
@@ -233,5 +251,4 @@ async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply = await get_ai_reply(update.effective_chat.id, text)
 
-    # ✅ no stylize here too
     await update.message.reply_text(reply)
