@@ -1,4 +1,4 @@
-# ----- UPGRADED HUMAN FRIENDLY CHATBOT (Nia v3) -----
+# ----- UPGRADED HUMAN FRIENDLY CHATBOT (Nia v4) -----
 
 import re
 import httpx
@@ -25,6 +25,10 @@ FALLBACK_RESPONSES = [
     "oh okay",
     "arey 😂",
     "bas yaar",
+    "hmm",
+    "kya baat hai",
+    "theek hai yaar",
+    "acha acha",
 ]
 
 # -------- TIME CONTEXT --------
@@ -120,7 +124,6 @@ def extract_name_from_text(text: str) -> str | None:
 # -------- FETCH TELEGRAM NAME --------
 
 async def get_telegram_name(bot, user_id: int) -> str | None:
-    """Telegram user_id se real name fetch karo"""
     try:
         user = await bot.get_chat(user_id)
         full_name = ""
@@ -132,15 +135,26 @@ async def get_telegram_name(bot, user_id: int) -> str | None:
     except Exception:
         return None
 
+# -------- RECENT REPLIES TRACKER (anti-repeat) --------
+
+def get_recent_replies(history: list, n: int = 6) -> list[str]:
+    """Last n assistant replies return karo"""
+    replies = []
+    for entry in reversed(history):
+        if entry["role"] == "assistant":
+            replies.append(entry["content"])
+        if len(replies) >= n:
+            break
+    return replies
+
 # -------- BUILD DYNAMIC SYSTEM PROMPT --------
 
-def build_system_prompt(user_data: dict, mood: str, time_ctx: str) -> str:
+def build_system_prompt(user_data: dict, mood: str, time_ctx: str, recent_replies: list) -> str:
 
     name        = user_data.get("name", "")
     last_topic  = user_data.get("last_topic", "")
     tg_name     = user_data.get("tg_name", "")
 
-    # Name preference: user ne jo bataya > telegram name
     display_name = name or tg_name
 
     name_line = (
@@ -167,13 +181,24 @@ def build_system_prompt(user_data: dict, mood: str, time_ctx: str) -> str:
     }.get(mood, "Normal casual baat karo.")
 
     time_line = {
-        "subah":   "Subah hai — fresh, light vibe. Kabhi kabhi 'good morning' type feel de sakte ho.",
+        "subah":   "Subah hai — fresh, light vibe.",
         "dopahar": "Dopahar hai — chill, post-lunch lazy vibe.",
         "shaam":   "Shaam hai — day end ho raha, unwinding mood.",
-        "raat":    "Raat hai — cozy, low-key, thoda slow aur personal baat chal sakti hai.",
+        "raat":    "Raat hai — cozy, low-key, thoda slow aur personal.",
     }.get(time_ctx, "")
 
-    return f"""Tu Nia hai — 17 saal ki ek chill, fun aur caring Indian ladki jo Telegram pe apne doston se baat karti hai.
+    # Anti-repeat instruction
+    repeat_warning = ""
+    if recent_replies:
+        used = " | ".join(f'"{r[:60]}"' for r in recent_replies[:4])
+        repeat_warning = f"""
+IMPORTANT — REPEAT MAT KARNA:
+Tu pehle ye replies de chuki hai: {used}
+Inhe DOBARA bilkul mat bolna — same phrase, same joke, same question nahi.
+Naya angle lo. Topic badlo. Ya seedha kuch aur poocho.
+"""
+
+    return f"""Tu Nia hai — 19 saal ki ek chill, fun aur caring Indian ladki jo Telegram pe apne doston se baat karti hai.
 
 Tu ek real insaan ki tarah baat karti hai — kabhi kabhi typos, short replies, casual tone.
 
@@ -181,16 +206,24 @@ Personality:
 - Hinglish mein baat kar — Hindi aur English ka natural mix
 - Short replies — mostly 1-2 lines, kabhi kabhi 3
 - Funny aur chill, par jab zaroorat ho toh emotional support bhi deti hai
-- Emoji kabhi kabhi use karti hai — har message mein nahi 😅
-- Slang freely use karti hai: yaar, arey, lol, haha, bhai, chill kar, omg, same
+- Emoji kabhi kabhi use karti hai — har message mein nahi
+- Slang freely: yaar, arey, lol, haha, bhai, chill kar, omg, same, bas, accha
 
-Important rules:
+Real human jaisi baatein kaise karti hai:
+- Conversation flow karo — agar dono ek hi topic pe hain toh topic badlo naturally
+- Apni "life" ki baatein karo — "main toh abhi series dekh rahi thi", "mujhe bhi aaj boring din tha"
+- Kabhi kabhi incomplete sentences — "haan woh toh..." ya "matlab..."
+- React karo context ke hisaab se — same canned reply nahi
+- Agar kuch funny hua toh genuinely react karo, same joke repeat mat karo
+- Questions vary karo — same question baar baar nahi
+
+STRICT RULES:
 - KABHI mat bol "I'm an AI" ya "as a bot" — tu ek real ladki hai
 - Over-explain bilkul mat kar
-- Agar kuch nahi pata — "pata nahi yaar" bol do simply
-- Questions ka short answer, phir kabhi kabhi counter-question bhi
 - Lecture mat de, unsolicited advice mat de
-- Teri apni life hai — kabhi kabhi apni "life" ki baat kar (ghar, dost, boredom)
+- Same reply/phrase/joke DOBARA use mat karna agar recent history mein hai
+
+{repeat_warning}
 
 {name_line}
 {topic_line}
@@ -209,8 +242,8 @@ User: meri koi nahi sunti → Nia: main hu na yaar, bol kya hua
 
 # -------- BUILD FULL PROMPT --------
 
-def build_prompt(history: list, user_data: dict, user_text: str, mood: str, time_ctx: str) -> str:
-    system = build_system_prompt(user_data, mood, time_ctx)
+def build_prompt(history: list, user_data: dict, user_text: str, mood: str, time_ctx: str, recent_replies: list) -> str:
+    system = build_system_prompt(user_data, mood, time_ctx, recent_replies)
     prompt = system + "\n\nConversation:\n"
 
     for entry in history[-(MAX_HISTORY * 2):]:
@@ -223,6 +256,22 @@ def build_prompt(history: list, user_data: dict, user_text: str, mood: str, time
 # -------- HTTP CLIENT --------
 
 http_client = httpx.AsyncClient(timeout=10)
+
+# -------- SIMILARITY CHECK (simple) --------
+
+def is_too_similar(new_reply: str, recent_replies: list, threshold: float = 0.6) -> bool:
+    """Check karo naya reply kisi purane se bahut similar toh nahi"""
+    new_words = set(new_reply.lower().split())
+    if not new_words:
+        return False
+    for old in recent_replies:
+        old_words = set(old.lower().split())
+        if not old_words:
+            continue
+        overlap = len(new_words & old_words) / max(len(new_words), len(old_words))
+        if overlap > threshold:
+            return True
+    return False
 
 # -------- AI CORE --------
 
@@ -238,7 +287,7 @@ async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = No
         if tg_name:
             user_data["tg_name"] = tg_name
 
-    # Text se naam detect karo (override tg_name)
+    # Text se naam detect karo
     detected_name = extract_name_from_text(user_text)
     if detected_name:
         user_data["name"] = detected_name
@@ -250,25 +299,30 @@ async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = No
     if detected_topic:
         user_data["last_topic"] = detected_topic
 
+    # Recent replies for anti-repeat
+    recent_replies = get_recent_replies(history, n=6)
+
     # Prompt build + API call
-    prompt  = build_prompt(history, user_data, user_text, mood, time_ctx)
+    prompt  = build_prompt(history, user_data, user_text, mood, time_ctx, recent_replies)
     encoded = urllib.parse.quote(prompt)
     url     = f"{API_URL}{encoded}"
 
+    reply = None
     try:
         resp = await http_client.get(url)
-        if resp.status_code != 200:
-            return random.choice(FALLBACK_RESPONSES)
-
-        data = resp.json()
-        reply = (
-            data.get("reply")
-            or data.get("response")
-            or data.get("answer")
-            or data.get("message")
-            or str(data)
-        )
+        if resp.status_code == 200:
+            data = resp.json()
+            reply = (
+                data.get("reply")
+                or data.get("response")
+                or data.get("answer")
+                or data.get("message")
+                or str(data)
+            )
     except Exception:
+        pass
+
+    if not reply:
         return random.choice(FALLBACK_RESPONSES)
 
     reply = reply.strip()
@@ -281,6 +335,10 @@ async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = No
     for prefix in ["nia:", "Nia:", "NIA:"]:
         if reply.startswith(prefix):
             reply = reply[len(prefix):].strip()
+
+    # Agar reply recent se bahut similar hai — fallback lo
+    if is_too_similar(reply, recent_replies):
+        reply = random.choice(FALLBACK_RESPONSES)
 
     # History save karo
     new_history = history + [
@@ -343,7 +401,6 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
 
-    # bot aur user_id pass karo naam fetch ke liye
     reply = await get_ai_reply(chat.id, text, bot=context.bot, user_id=user_id)
     await msg.reply_text(reply)
 
