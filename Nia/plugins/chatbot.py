@@ -14,24 +14,39 @@ from Nia.database import chatbot_collection
 # -------- SETTINGS --------
 
 API_URL = "https://niaapi-28892feecb5a.herokuapp.com/?text="
-MAX_HISTORY = 6
+MAX_HISTORY = 4
 
 # -------- FALLBACKS — real human jaisi --------
 
 FALLBACK_RESPONSES = [
     "hmm",
-    "haan",
-    "acha",
+    "acha yaar",
     "lol",
-    "sach mein",
-    "arey 😂",
+    "sach mein 😂",
+    "arey",
     "bas yaar",
-    "hm okay",
-    "kya baat",
     "oof",
     "haww",
-    "matlab?",
+    "haha",
+    "omg",
 ]
+
+# Context-aware fallback
+def get_smart_fallback(user_text: str) -> str:
+    t = user_text.lower().strip()
+    if any(w in t for w in ["hi", "hey", "hello", "nia", "hii"]):
+        return random.choice(["hey 🙂", "haan bol", "hi yaar"])
+    if any(w in t for w in ["kya kar", "kya ho", "kya chal"]):
+        return random.choice(["kuch nahi yaar bore ho rahi", "phone pe hu bas", "abhi free hu"])
+    if any(w in t for w in ["kya hua", "kya ho gaya", "sab theek"]):
+        return random.choice(["haan sab theek", "kuch nahi tu bata", "normal hi hai"])
+    if any(w in t for w in ["sad", "dukhi", "rona", "bura"]):
+        return random.choice(["arey kya hua bata", "kya hua yaar", "sab theek hoga"])
+    if any(w in t for w in ["haha", "lol", "lmao", "funny", "mast"]):
+        return random.choice(["haha 😂", "lmao sach mein", "omg 😂"])
+    if any(w in t for w in ["okay", "theek", "acha", "hmm"]):
+        return random.choice(["haan", "accha", "theek hai"])
+    return random.choice(FALLBACK_RESPONSES)
 
 # Nia ki apni "life" — random inject hoti hai naturally
 NIA_LIFE_BITS = [
@@ -169,77 +184,40 @@ def get_reply_count(history: list) -> int:
 
 def build_system_prompt(user_data: dict, mood: str, time_ctx: str, recent_replies: list, reply_count: int) -> str:
 
-    name       = user_data.get("name", "")
-    tg_name    = user_data.get("tg_name", "")
-    last_topic = user_data.get("last_topic", "")
+    name         = user_data.get("name", "")
+    tg_name      = user_data.get("tg_name", "")
     display_name = name or tg_name
 
-    # Naam sirf occasional use — counter based
-    use_name_now = display_name and (reply_count % 5 == 0)
-    name_line = (
-        f"Is reply mein user ka naam '{display_name}' use kar sakte ho — naturally, ek baar."
-        if use_name_now else
-        f"Is reply mein naam MAT use karna. Bina naam ke baat karo."
-    )
+    # Naam har 5th reply mein
+    naam = f"(naam '{display_name}' kabhi kabhi use kar)" if (display_name and reply_count % 5 == 0) else ""
 
-    topic_line = (
-        f"Context: pehle '{last_topic}' pe baat thi, naturally refer kar sako toh karo."
-        if last_topic else ""
-    )
+    mood_map = {
+        "sad":     "user dukhi — warm, sun, 'kya hua'",
+        "angry":   "user gusse mein — calm, 'chill kar'",
+        "happy":   "user khush — energy match karo",
+        "nervous": "user nervous — 'sab theek hoga'",
+        "neutral": "casual",
+    }
+    mood_hint = mood_map.get(mood, "casual")
 
-    mood_instructions = {
-        "sad":     "User dukhi hai. Seedha 'kya hua' poocho — chhota, warm. Advice mat do.",
-        "angry":   "User irritated hai. Argue mat karo. 'chill kar na' type — light karo.",
-        "happy":   "User khush hai. Uski energy match karo — chhota fun reaction.",
-        "nervous": "User nervous hai. 'sab ho jayega' type — calmly.",
-        "neutral": "Normal casual.",
-    }.get(mood, "Normal casual.")
+    time_hint = {"subah": "subah", "dopahar": "dopahar", "shaam": "shaam", "raat": "raat"}.get(time_ctx, "")
 
-    time_instruction = {
-        "subah":   "Subah hai.",
-        "dopahar": "Dopahar hai.",
-        "shaam":   "Shaam hai.",
-        "raat":    "Raat hai — thoda chill/slow vibe.",
-    }.get(time_ctx, "")
-
-    # Anti-repeat
-    repeat_block = ""
+    # Anti-repeat — sirf last 3
+    no_repeat = ""
     if recent_replies:
-        used = " | ".join(f'"{r[:50]}"' for r in recent_replies[:4])
-        repeat_block = f"Ye mat bolna (already bol chuki hai): {used}"
+        used = " / ".join(f'"{r[:40]}"' for r in recent_replies[:3])
+        no_repeat = f"Mat bol: {used}"
 
-    # Kabhi kabhi apni life inject karo
-    life_bit = ""
-    if random.random() < 0.2:  # 20% chance
-        life_bit = f"Apni chhoti si baat bhi daal sakti hai: e.g. '{random.choice(NIA_LIFE_BITS)}'"
+    life_hint = f"(apni baat: '{random.choice(NIA_LIFE_BITS)}')" if random.random() < 0.2 else ""
 
-    return f"""Tu Nia hai. 19 saal. Real Indian girl. Telegram pe dost se baat kar rahi hai.
-
-SABSE ZAROORI: Pehle USER KA MESSAGE padh, uska matlab samajh, PHIR reply kar.
-Agar user ne kuch poocha toh jawab de. Agar bata raha hai toh react kar. Context mat bhool.
-
-REPLY RULES:
-- Hinglish. Casual. Short. Max 12 words.
-- Kabhi kabhi sirf 2-3 words: "omg", "haww", "sach mein?", "lmao"
-- Question sirf tab jab naturally zaroorat ho — har baar nahi
-- Emoji sirf 1, sirf kabhi kabhi
-- "I'm an AI" kabhi nahi
-- Lecture/explanation nahi
-
-NAAM: {name_line}
-MOOD: {mood_instructions}
-TIME: {time_instruction}
-{topic_line}
-{repeat_block}
-{life_bit}
-
-EXAMPLES — context ke hisaab se reply karo:
-User: "kya kar rahi?" -> "phone pe hu bas" ya "kuch nahi yaar bore ho rahi"
-User: "hi" -> "hey" ya "haan bol"
-User: "raat ho rahi pagal" -> "haha chill kar" ya "so ja phir"
-User: "kya kar rahi vc me songs" -> "aa ja phir" ya "chal sunte hai"
-User: "matlab?" -> context dekh ke jawab de, random mat bol
-"""
+    return (
+        f"Tu Nia hai, 19y Indian girl, dost se Telegram pe baat. Hinglish. Casual. Real.\n"
+        f"USER KA MESSAGE padh, context samajh, tabhi reply kar. Bekar random reply mat de.\n"
+        f"Max 10 words. Short = good. Emoji kabhi kabhi. AI mat bolna. Lecture nahi.\n"
+        f"Mood: {mood_hint}. Time: {time_hint}. {naam} {life_hint}\n"
+        f"{no_repeat}\n"
+        f"Examples: 'hi'->'hey', 'kya kar rahi'->'phone pe hu', 'kya hua'->context se jawab, 'raat ho rahi'->'so ja phir 😂'"
+    )
 
 # -------- BUILD FULL PROMPT --------
 
@@ -256,7 +234,7 @@ def build_prompt(history: list, user_data: dict, user_text: str, mood: str, time
 
 # -------- HTTP CLIENT --------
 
-http_client = httpx.AsyncClient(timeout=10)
+http_client = httpx.AsyncClient(timeout=6)
 
 # -------- SIMILARITY CHECK --------
 
@@ -356,13 +334,13 @@ async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = No
         pass
 
     if not reply:
-        return random.choice(FALLBACK_RESPONSES)
+        return get_smart_fallback(user_text)
 
     reply = clean_reply(reply)
 
-    # Similar hai toh fallback
+    # Similar hai toh context-aware fallback
     if is_too_similar(reply, recent_replies):
-        reply = random.choice(FALLBACK_RESPONSES)
+        reply = get_smart_fallback(user_text)
 
     # History update
     new_history = history + [
