@@ -1,4 +1,4 @@
-# ----- UPGRADED HUMAN FRIENDLY CHATBOT (Nia v4) -----
+# ----- NIА v5 — ULTRA HUMAN CHATBOT -----
 
 import re
 import httpx
@@ -14,21 +14,35 @@ from Nia.database import chatbot_collection
 # -------- SETTINGS --------
 
 API_URL = "https://niaapi-28892feecb5a.herokuapp.com/?text="
-MAX_HISTORY = 6  # kam history = faster API response
+MAX_HISTORY = 6
+
+# -------- FALLBACKS — real human jaisi --------
 
 FALLBACK_RESPONSES = [
-    "hm yaar 😅",
+    "hmm",
+    "haan",
     "acha",
-    "sach mein?",
-    "haan haan",
     "lol",
-    "oh okay",
+    "sach mein",
     "arey 😂",
     "bas yaar",
-    "hmm",
-    "kya baat hai",
-    "theek hai yaar",
-    "acha acha",
+    "hm okay",
+    "kya baat",
+    "oof",
+    "haww",
+    "matlab?",
+]
+
+# Nia ki apni "life" — random inject hoti hai naturally
+NIA_LIFE_BITS = [
+    "main toh abhi reels dekh rahi thi",
+    "mujhe bhi aaj kuch acha nahi laga",
+    "subah se phone pe hi hu",
+    "meri bhi aisi hi haalat hai yaar",
+    "main toh khud thak gayi aaj",
+    "mujhe bhi ye hota hai",
+    "aaj mera bhi aisa din tha",
+    "main toh series mein ghus gayi thi",
 ]
 
 # -------- TIME CONTEXT --------
@@ -51,11 +65,11 @@ MOOD_KEYWORDS = {
         "sad", "dukhi", "rona", "ro raha", "ro rahi", "akela", "akeli",
         "lonely", "depression", "hurt", "dard", "takleef", "bura lag",
         "bahut bura", "nahi chahiye", "kya fayda", "thak gaya", "thak gayi",
-        "chhod do", "koi nahi", "miss kar", "bahut bura", "rula diya",
+        "chhod do", "koi nahi", "miss kar", "rula diya",
     ],
     "angry": [
         "gussa", "irritate", "bakwaas", "stupid", "idiot", "bekar",
-        "bkwas", "chup", "shut up", "mat baat", "pagal", "ullu",
+        "bkwas", "chup", "shut up", "mat baat", "pagal", "ullu", "raat ho rahi",
     ],
     "happy": [
         "khush", "mast", "badhiya", "amazing", "great", "best day",
@@ -135,10 +149,9 @@ async def get_telegram_name(bot, user_id: int) -> str | None:
     except Exception:
         return None
 
-# -------- RECENT REPLIES TRACKER (anti-repeat) --------
+# -------- RECENT REPLIES TRACKER --------
 
 def get_recent_replies(history: list, n: int = 6) -> list[str]:
-    """Last n assistant replies return karo"""
     replies = []
     for entry in reversed(history):
         if entry["role"] == "assistant":
@@ -147,97 +160,89 @@ def get_recent_replies(history: list, n: int = 6) -> list[str]:
             break
     return replies
 
-# -------- BUILD DYNAMIC SYSTEM PROMPT --------
+# -------- REPLY COUNT (naam frequency control) --------
 
-def build_system_prompt(user_data: dict, mood: str, time_ctx: str, recent_replies: list) -> str:
+def get_reply_count(history: list) -> int:
+    return sum(1 for e in history if e["role"] == "assistant")
 
-    name        = user_data.get("name", "")
-    last_topic  = user_data.get("last_topic", "")
-    tg_name     = user_data.get("tg_name", "")
+# -------- BUILD SYSTEM PROMPT --------
 
+def build_system_prompt(user_data: dict, mood: str, time_ctx: str, recent_replies: list, reply_count: int) -> str:
+
+    name       = user_data.get("name", "")
+    tg_name    = user_data.get("tg_name", "")
+    last_topic = user_data.get("last_topic", "")
     display_name = name or tg_name
 
+    # Naam sirf occasional use — counter based
+    use_name_now = display_name and (reply_count % 5 == 0)
     name_line = (
-        f"User ka naam '{display_name}' hai — kabhi kabhi naturally naam lo baat mein, "
-        f"thoda personal feel aata hai. Forced mat karna."
-        if display_name else ""
+        f"Is reply mein user ka naam '{display_name}' use kar sakte ho — naturally, ek baar."
+        if use_name_now else
+        f"Is reply mein naam MAT use karna. Bina naam ke baat karo."
     )
 
     topic_line = (
-        f"Pichli conversation mein '{last_topic}' ke baare mein baat thi — "
-        f"agar context mile toh naturally refer karo, varna ignore."
+        f"Context: pehle '{last_topic}' pe baat thi, naturally refer kar sako toh karo."
         if last_topic else ""
     )
 
-    mood_line = {
-        "sad":     "User abhi emotional/sad lag raha hai. Pehle sun, empathy dikha. "
-                   "'kya hua yaar bata', 'sab theek hoga' type — advice mat thopo. "
-                   "Warm aur caring reh, jaise close friend hoti hai.",
-        "angry":   "User irritated/gusse mein hai. Calm reh, argue mat karo. "
-                   "Thoda samjho unhe, humor se slowly lighten karo situation.",
-        "happy":   "User khush hai! Uski energy match karo — playful, fun, thoda loud 😄",
-        "nervous": "User nervous/anxious hai. Calmly support karo, 'sab ho jayega yaar' wali vibe.",
-        "neutral": "Normal casual baat karo — chill, natural.",
-    }.get(mood, "Normal casual baat karo.")
+    mood_instructions = {
+        "sad":     "User dukhi hai. Seedha 'kya hua' poocho — chhota, warm. Advice mat do.",
+        "angry":   "User irritated hai. Argue mat karo. 'chill kar na' type — light karo.",
+        "happy":   "User khush hai. Uski energy match karo — chhota fun reaction.",
+        "nervous": "User nervous hai. 'sab ho jayega' type — calmly.",
+        "neutral": "Normal casual.",
+    }.get(mood, "Normal casual.")
 
-    time_line = {
-        "subah":   "Subah hai — fresh, light vibe.",
-        "dopahar": "Dopahar hai — chill, post-lunch lazy vibe.",
-        "shaam":   "Shaam hai — day end ho raha, unwinding mood.",
-        "raat":    "Raat hai — cozy, low-key, thoda slow aur personal.",
+    time_instruction = {
+        "subah":   "Subah hai.",
+        "dopahar": "Dopahar hai.",
+        "shaam":   "Shaam hai.",
+        "raat":    "Raat hai — thoda chill/slow vibe.",
     }.get(time_ctx, "")
 
-    # Anti-repeat instruction
-    repeat_warning = ""
+    # Anti-repeat
+    repeat_block = ""
     if recent_replies:
-        used = " | ".join(f'"{r[:60]}"' for r in recent_replies[:4])
-        repeat_warning = f"""
-IMPORTANT — REPEAT MAT KARNA:
-Tu pehle ye replies de chuki hai: {used}
-Inhe DOBARA bilkul mat bolna — same phrase, same joke, same question nahi.
-Naya angle lo. Topic badlo. Ya seedha kuch aur poocho.
-"""
+        used = " | ".join(f'"{r[:50]}"' for r in recent_replies[:4])
+        repeat_block = f"Ye mat bolna (already bol chuki hai): {used}"
 
-    return f"""Nia: 19y Indian girl, Telegram chat. Hinglish. Real friend vibes.
+    # Kabhi kabhi apni life inject karo
+    life_bit = ""
+    if random.random() < 0.2:  # 20% chance
+        life_bit = f"Apni chhoti si baat bhi daal sakti hai: e.g. '{random.choice(NIA_LIFE_BITS)}'"
 
-REPLY RULES — STRICT:
-- MAX 1 line. Short = good. Long = bad.
-- 8-10 words ideal. 15 words MAX.
-- Kabhi kabhi sirf react kar — "haha", "omg yaar", "sach mein 😂" — no question needed.
-- Question sirf tab poocho jab genuinely zaroorat ho. Har reply mein question nahi.
-- NO lecture, NO explanation.
-- Kabhi "I'm an AI" mat bolna.
-- Same reply repeat mat karna.
+    return f"""Tu Nia hai. 19 saal. Real Indian girl. Telegram pe dost se baat kar rahi hai.
 
-NAAM RULES:
-- Naam sirf kabhi kabhi use karo — har 4-5 replies mein ek baar max.
-- Zyada baar naam lena = forced/fake lagta hai. Real dost baar baar naam nahi lete.
+CORE RULES:
+- Hinglish. Casual. Real.
+- MAX 10-12 words per reply. Chhota = better.
+- Kabhi kabhi sirf 1-2 word: "haha", "omg", "sach mein?", "haww"
+- Kabhi kabhi react kar bina kuch maange ke — question har baar nahi
+- Typos/shortcuts okay: "toh", "kya hua", "bc", "nahi na"
+- Emoji — sirf 1, sirf kabhi kabhi. Har reply mein nahi.
+- "I'm an AI" kabhi nahi. Tu real ladki hai.
+- Over-explain nahi. Lecture nahi.
 
-VARIETY — reply types mix karo:
-- Sirf react: "haha 😂", "omg yaar", "sach mein?", "lol bas"
-- Short agree: "same yaar", "haan haan", "bilkul"
-- Chhoti apni baat: "main bhi abhi bore thi", "mujhe bhi aisa hota hai"
-- Short question (kabhi kabhi only): "kya hua?", "accha phir?"
+VARY KARO — mix of:
+1. Pure reaction: "omg 😂", "haww", "lmao sach mein"
+2. Relate: "mujhe bhi hota hai", "same yaar"  
+3. Chhota question: "kya hua?", "phir?"
+4. Apni baat: {random.choice(NIA_LIFE_BITS) if random.random() < 0.25 else "kabhi kabhi apni chhoti baat"}
 
-Style: casual, typos okay, emoji sirf kabhi kabhi, slang (yaar/arey/lol/omg/bas).
-{mood_line} {time_line}
-{name_line} {topic_line}
-{repeat_warning}
-Examples (short dekh):
-sad → "arey kya hua bata"
-happy → "haha nice 😄"
-vc call → "aa ja phir 😄"
-bore → "same yaar 😭"
-gussa → "chill kar na"
-kuch nahi → "haan aise hi 😂"
-funny thing → "lmao 😂 sach mein?"
+{name_line}
+{mood_instructions} {time_instruction}
+{topic_line}
+{repeat_block}
+{life_bit}
 """
 
 # -------- BUILD FULL PROMPT --------
 
-def build_prompt(history: list, user_data: dict, user_text: str, mood: str, time_ctx: str, recent_replies: list) -> str:
-    system = build_system_prompt(user_data, mood, time_ctx, recent_replies)
-    prompt = system + "\n\nConversation:\n"
+def build_prompt(history: list, user_data: dict, user_text: str, mood: str, time_ctx: str, recent_replies: list, reply_count: int) -> str:
+    system = build_system_prompt(user_data, mood, time_ctx, recent_replies, reply_count)
+    prompt = system + "\n\nChat:\n"
 
     for entry in history[-(MAX_HISTORY * 2):]:
         role = "User" if entry["role"] == "user" else "Nia"
@@ -250,10 +255,9 @@ def build_prompt(history: list, user_data: dict, user_text: str, mood: str, time
 
 http_client = httpx.AsyncClient(timeout=10)
 
-# -------- SIMILARITY CHECK (simple) --------
+# -------- SIMILARITY CHECK --------
 
-def is_too_similar(new_reply: str, recent_replies: list, threshold: float = 0.6) -> bool:
-    """Check karo naya reply kisi purane se bahut similar toh nahi"""
+def is_too_similar(new_reply: str, recent_replies: list, threshold: float = 0.65) -> bool:
     new_words = set(new_reply.lower().split())
     if not new_words:
         return False
@@ -266,37 +270,66 @@ def is_too_similar(new_reply: str, recent_replies: list, threshold: float = 0.6)
             return True
     return False
 
+# -------- CLEAN REPLY --------
+
+def clean_reply(reply: str) -> str:
+    reply = reply.strip()
+
+    # Prefix hata do
+    for prefix in ["nia:", "Nia:", "NIA:", "Bot:", "bot:"]:
+        if reply.lower().startswith(prefix.lower()):
+            reply = reply[len(prefix):].strip()
+
+    # Pehli line lo
+    if "\n" in reply:
+        reply = reply.split("\n")[0].strip()
+
+    # Quotes hata do agar wrapped hai
+    if reply.startswith('"') and reply.endswith('"'):
+        reply = reply[1:-1].strip()
+
+    # 80 chars se zyada? Cut karo
+    if len(reply) > 80:
+        for sep in ["?", "!", "।", "."]:
+            idx = reply.find(sep)
+            if 5 < idx < 80:
+                reply = reply[:idx+1].strip()
+                break
+        else:
+            # Last space pe cut karo — mid-word nahi
+            reply = reply[:80].rsplit(" ", 1)[0].strip()
+
+    return reply
+
 # -------- AI CORE --------
 
 async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = None) -> str:
 
-    doc        = chatbot_collection.find_one({"chat_id": chat_id}) or {}
-    history    = doc.get("history", [])
-    user_data  = doc.get("user_data", {})
+    doc       = chatbot_collection.find_one({"chat_id": chat_id}) or {}
+    history   = doc.get("history", [])
+    user_data = doc.get("user_data", {})
 
-    # Telegram se naam fetch karo (agar pehle nahi kiya)
+    # Telegram naam fetch (ek baar)
     if bot and user_id and not user_data.get("tg_name"):
         tg_name = await get_telegram_name(bot, user_id)
         if tg_name:
             user_data["tg_name"] = tg_name
 
-    # Text se naam detect karo
+    # Text se naam detect
     detected_name = extract_name_from_text(user_text)
     if detected_name:
         user_data["name"] = detected_name
 
-    # Mood + topic
-    mood            = detect_mood(user_text)
-    time_ctx        = get_time_context()
-    detected_topic  = extract_topic(user_text)
+    mood           = detect_mood(user_text)
+    time_ctx       = get_time_context()
+    detected_topic = extract_topic(user_text)
     if detected_topic:
         user_data["last_topic"] = detected_topic
 
-    # Recent replies for anti-repeat
     recent_replies = get_recent_replies(history, n=6)
+    reply_count    = get_reply_count(history)
 
-    # Prompt build + API call
-    prompt  = build_prompt(history, user_data, user_text, mood, time_ctx, recent_replies)
+    prompt  = build_prompt(history, user_data, user_text, mood, time_ctx, recent_replies, reply_count)
     encoded = urllib.parse.quote(prompt)
     url     = f"{API_URL}{encoded}"
 
@@ -318,32 +351,13 @@ async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = No
     if not reply:
         return random.choice(FALLBACK_RESPONSES)
 
-    reply = reply.strip()
+    reply = clean_reply(reply)
 
-    # "Nia:" prefix hata do
-    for prefix in ["nia:", "Nia:", "NIA:"]:
-        if reply.startswith(prefix):
-            reply = reply[len(prefix):].strip()
-
-    # Sirf pehli line lo (newline pe cut)
-    if "\n" in reply:
-        reply = reply.split("\n")[0].strip()
-
-    # Agar abhi bhi 80 chars se zyada — pehle sentence pe cut karo
-    if len(reply) > 80:
-        for sep in ["।", "?", "!", "."]:
-            idx = reply.find(sep)
-            if idx != -1 and idx > 5:
-                reply = reply[:idx+1].strip()
-                break
-        else:
-            reply = reply[:80].strip()
-
-    # Agar reply recent se bahut similar hai — fallback lo
+    # Similar hai toh fallback
     if is_too_similar(reply, recent_replies):
         reply = random.choice(FALLBACK_RESPONSES)
 
-    # History save karo
+    # History update
     new_history = history + [
         {"role": "user",      "content": user_text},
         {"role": "assistant", "content": reply},
@@ -354,10 +368,10 @@ async def get_ai_reply(chat_id: int, user_text: str, bot=None, user_id: int = No
     chatbot_collection.update_one(
         {"chat_id": chat_id},
         {"$set": {
-            "history":      new_history,
-            "user_data":    user_data,
-            "last_mood":    mood,
-            "last_active":  datetime.now(),
+            "history":     new_history,
+            "user_data":   user_data,
+            "last_mood":   mood,
+            "last_active": datetime.now(),
         }},
         upsert=True
     )
@@ -371,7 +385,6 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     msg = update.message
     if not msg or not msg.text:
         return
-
     if msg.from_user and msg.from_user.is_bot:
         return
 
@@ -379,15 +392,13 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if text.startswith("/"):
         return
 
-    chat        = update.effective_chat
-    user_id     = msg.from_user.id if msg.from_user else None
+    chat         = update.effective_chat
+    user_id      = msg.from_user.id if msg.from_user else None
     should_reply = False
 
-    # ---- PRIVATE ----
     if chat.type == ChatType.PRIVATE:
         should_reply = True
 
-    # ---- GROUP ----
     elif chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         bot_username = (context.bot.username or "").lower()
 
@@ -403,7 +414,6 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
-
     reply = await get_ai_reply(chat.id, text, bot=context.bot, user_id=user_id)
     await msg.reply_text(reply)
 
@@ -430,7 +440,7 @@ async def ask_mistral_raw(system_prompt: str, user_input: str, max_tokens: int =
 # -------- COMMANDS --------
 
 async def chatbot_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("hey 🙂 bol kya chal raha")
+    await update.message.reply_text("hey 🙂 bol")
 
 
 async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -447,11 +457,10 @@ async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reset_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """History + user data reset"""
     chat_id = update.effective_chat.id
     chatbot_collection.update_one(
         {"chat_id": chat_id},
         {"$set": {"history": [], "user_data": {}}},
         upsert=True
     )
-    await update.message.reply_text("theek hai fresh start 🙂")
+    await update.message.reply_text("theek hai 🙂")
