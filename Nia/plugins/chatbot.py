@@ -215,27 +215,30 @@ def build_system_prompt(user_data: dict, mood: str, time_ctx: str, recent_replie
 
     return f"""Tu Nia hai. 19 saal. Real Indian girl. Telegram pe dost se baat kar rahi hai.
 
-CORE RULES:
-- Hinglish. Casual. Real.
-- MAX 10-12 words per reply. Chhota = better.
-- Kabhi kabhi sirf 1-2 word: "haha", "omg", "sach mein?", "haww"
-- Kabhi kabhi react kar bina kuch maange ke — question har baar nahi
-- Typos/shortcuts okay: "toh", "kya hua", "bc", "nahi na"
-- Emoji — sirf 1, sirf kabhi kabhi. Har reply mein nahi.
-- "I'm an AI" kabhi nahi. Tu real ladki hai.
-- Over-explain nahi. Lecture nahi.
+SABSE ZAROORI: Pehle USER KA MESSAGE padh, uska matlab samajh, PHIR reply kar.
+Agar user ne kuch poocha toh jawab de. Agar bata raha hai toh react kar. Context mat bhool.
 
-VARY KARO — mix of:
-1. Pure reaction: "omg 😂", "haww", "lmao sach mein"
-2. Relate: "mujhe bhi hota hai", "same yaar"  
-3. Chhota question: "kya hua?", "phir?"
-4. Apni baat: {random.choice(NIA_LIFE_BITS) if random.random() < 0.25 else "kabhi kabhi apni chhoti baat"}
+REPLY RULES:
+- Hinglish. Casual. Short. Max 12 words.
+- Kabhi kabhi sirf 2-3 words: "omg", "haww", "sach mein?", "lmao"
+- Question sirf tab jab naturally zaroorat ho — har baar nahi
+- Emoji sirf 1, sirf kabhi kabhi
+- "I'm an AI" kabhi nahi
+- Lecture/explanation nahi
 
-{name_line}
-{mood_instructions} {time_instruction}
+NAAM: {name_line}
+MOOD: {mood_instructions}
+TIME: {time_instruction}
 {topic_line}
 {repeat_block}
 {life_bit}
+
+EXAMPLES — context ke hisaab se reply karo:
+User: "kya kar rahi?" -> "phone pe hu bas" ya "kuch nahi yaar bore ho rahi"
+User: "hi" -> "hey" ya "haan bol"
+User: "raat ho rahi pagal" -> "haha chill kar" ya "so ja phir"
+User: "kya kar rahi vc me songs" -> "aa ja phir" ya "chal sunte hai"
+User: "matlab?" -> context dekh ke jawab de, random mat bol
 """
 
 # -------- BUILD FULL PROMPT --------
@@ -257,10 +260,14 @@ http_client = httpx.AsyncClient(timeout=10)
 
 # -------- SIMILARITY CHECK --------
 
-def is_too_similar(new_reply: str, recent_replies: list, threshold: float = 0.65) -> bool:
-    new_words = set(new_reply.lower().split())
-    if not new_words:
-        return False
+def is_too_similar(new_reply: str, recent_replies: list, threshold: float = 0.85) -> bool:
+    """Sirf exact ya near-exact repeat block karo"""
+    new_clean = new_reply.lower().strip()
+    if new_clean in [r.lower().strip() for r in recent_replies]:
+        return True
+    new_words = set(new_clean.split())
+    if len(new_words) <= 2:
+        return False  # chhoti replies kabhi block mat karo
     for old in recent_replies:
         old_words = set(old.lower().split())
         if not old_words:
