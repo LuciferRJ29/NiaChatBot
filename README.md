@@ -2,7 +2,7 @@
 <p align="center"> ​⚙️ ─「 𝐃𝐄𝐏𝐋𝐎𝐘 」─
 ​<h3 align="center">🚀 Deploy On Heroku</h3>
 ​<p align="center">
-<a href="https://dashboard.heroku.com/new?template=https://github.com/Zelvux/NiaChatBot">
+<a href="https://dashboard.heroku.com/new?template=https://github.com/LuciferRJ29/NiaChatBot">
 <img src="https://img.shields.io/badge/⚡%20Deploy%20To%20Heroku-purple?style=for-the-badge&logo=heroku" width="250">
 </a>
 </p>
